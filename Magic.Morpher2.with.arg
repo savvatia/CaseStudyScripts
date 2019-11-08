@@ -1,0 +1,148 @@
+#!/usr/bin/perl -w 
+
+# 
+# Magic.Morpher 
+# Helen Wier 
+# 12/20/05 
+# Made for Virtual Lesion process. Takes two stacks of tif files (from Afni), 
+# creates tga files from them, morphs them together using a user specified 
+# number of different values for mt and dt, and outputs another stack of tif 
+# images which can then be compared to each other. 
+# 
+############################################################################## 
+
+$results_path    = $ARGV[0]; 
+$original        = $ARGV[1]; 
+
+$transplant_path = $ARGV[2]; 
+$trimmed_path    = $ARGV[3]; 
+$expanded_path   = $ARGV[4]; 
+
+$iterations = $ARGV[5]; 
+$mesh       = $ARGV[6]; 
+$slice      = $ARGV[7]; 
+$output      = $ARGV[8]; 
+
+#this determines the morphing parameters 
+#print "how many iterations?"; 
+#   $iterations= <STDIN>; 
+#   chomp($iterations); 
+#print "number of slices?"; 
+#   $slice = <STDIN>; 
+#   chomp($slice); 
+#print "starting mt (between 0 and 0.5, include zero in front of decimal)"; 
+#   $mesh = <STDIN>; 
+#   chomp($mesh); 
+
+if ($mesh > .46) { 
+  print "***WARNING only one iteration on MT will be performed\n***"; 
+} 
+
+#this morphs the 2 files 
+#make the morph directories 
+@morph = (); 
+for ($i=$mesh; $i<.51; $i=$i+.05){ 
+  if (! -e "$transplant_path/morph$i") {
+	`rm -r $transplant_path/morph$i`; 
+	`mkdir $transplant_path/morph$i`; 
+	print "\ntransplant1/morph$i made.\n"; 
+  } 
+  for ($count=0; $count<$iterations;$count++){ 
+	$dt = $mesh + $count*.1; 
+	`rm -r $transplant_path/morph$i/morph$dt`;
+	`mkdir $transplant_path/morph$i/morph$dt`; 
+	print "\ntransplant1/morph$i/morph$dt made.\n"; 
+        @morph = (@morph, "$transplant_path/morph$i/morph$dt"); 
+  } 
+} 
+#this morphs the 2 stacks together 
+#goes through user determined number of iterations of dt before at starting mt, and then iterates through mts. 
+$count = $mesh; 
+while ($count <= .51){ 
+    $iter = 1; 
+    $dot = $mesh; 
+	while ($iter <= $iterations){ 
+		$x = 1; 
+		print "\nprocessing mt= $count iteration # $iter dt $dot\nimages"; 
+		while ($x < 10){ 
+			#if ($x ==1) { print "\n";} 
+			if ($x % 10 == 0) { print "$x"; } 
+			else { print "."; } 
+	 		#print "processing images $x\n"; 
+         		`morph -start $trimmed_path/trimmed.from3d.$x.tga -finish $expanded_path/expanded.from3d.$x.tga -mt $count -dt $dot -out $transplant_path/morph$count/morph$dot/morph.00$x.tga`; 
+			$x++; 
+        	} 
+		# At this point x = 10 
+       		if ($slice < 100) 
+    		{ 
+		   while ($x <= $slice){ 
+			#if ($x ==1) { print "\n";} 
+			if ($x % 10 == 0) { print "$x"; } 
+			else { print "."; } 
+	 		#print "processing images $x\n"; 
+         		`morph -start $trimmed_path/trimmed.from3d.$x.tga -finish $expanded_path/expanded.from3d.$x.tga -mt $count -dt $dot -out $transplant_path/morph$count/morph$dot/morph.0$x.tga`; 
+		     $x++; 
+        	   } 
+		 } 
+		 elsif($slice < 1000){ 
+		    while ($x < 100){ 
+			#if ($x ==1) { print "\n";} 
+			if ($x % 10 == 0) { print "$x"; } 
+			else { print "."; } 
+			#print "processing images $x\n"; 
+         		`morph -start $trimmed_path/trimmed.from3d.$x.tga -finish $expanded_path/expanded.from3d.$x.tga -mt $count -dt $dot -out $transplant_path/morph$count/morph$dot/morph.0$x.tga`; 
+			$x++; 
+		     } 
+		    # At this point x = 100 
+		    while ($x <= $slice){ 
+		        #if ($x ==1) { print "\n";} 
+		        if ($x % 10 == 0) { print "$x"; } 
+		        else { print "."; } 
+        	        #print "processing images $x\n"; 
+         		`morph -start $trimmed_path/trimmed.from3d.$x.tga -finish $expanded_path/expanded.from3d.$x.tga -mt $count -dt $dot -out $transplant_path/morph$count/morph$dot/morph.$x.tga`; 
+			$x++; 
+         	    } 
+        	}		# End of if(slice < 100) 
+                else { print "Can not process. Too many slices"} 
+        	$iter++; 
+        	$dot = $dot + .1; 
+	}			# End of while(iter <= iterations) 
+    $count = $count + .05; 
+} 
+
+## Limit is the number of iterations divided by 10 plus MT. 
+$limit=$mesh+$iterations*.1; 
+$mt = $mesh; 
+while ($mesh < .51){ 
+	for ($a=$mt; $a<$limit; $a=$a+.1) { 
+		print "processing dir morph$a\n"; 
+		`nconvert -out tiff $npath/Lesion/morph$mesh/morph$a/morph.0*tga`; 
+         	#$a = $a + .1; 
+	}          
+	$mesh = $mesh + .05 
+} 
+$i=$mesh; 
+$count=0; 
+foreach(@morph){ 
+	
+	$dt = $mesh + $count*.1;
+        
+       print "processing dir morph$_\n"; 
+       `nconvert -out ppm $_/*tga`;
+        print "ayylmao";
+
+	print "\nready to convert to Volume using to3d\n"; 
+       `to3d -session $results_path -datum short -geomparent $original.$output.full.expanded+orig -prefix $original.$output.morph$i.by$dt.short $_/*ppm`; 
+	$count=$count+1; 
+	if ($count>=$iterations){ 
+	    $count=0; 
+	    $i=$i+.05; 
+	} 
+}
+
+
+
+
+
+
+

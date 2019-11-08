@@ -1,0 +1,122 @@
+#!/bin/tcsh
+
+#source ${1}
+
+set flip_coef = 1
+if (( "${lesion_on_left}" == "no" )||( "${lesion_on_left}" == "n" )||( "${lesion_on_left}" == "No" )||( "${lesion_on_left}" == "N" )) then
+    set flip_coef = -1
+endif
+echo $flip_coef
+
+3dcopy ${data_path}${original}+orig ${results_path}${original}+orig
+#3dcopy ${data_path}${labels}+orig   ${results_path}${labels}+orig
+3dcopy ${data_path}${lesion}+orig   ${results_path}${lesion}+orig
+
+ cd ${results_path}
+
+3drefit -deoblique ${original}+orig
+3drefit -deoblique ${lesion}+orig
+
+## 1. Filling a lesion with a value and skull stripping
+
+3dcalc -a $original+orig -b $lesion+orig -expr "a*iszero(step(b))+250*step(b)" -prefix $original.lesionfilled
+3dSkullStrip -mask_vol -prefix $original.strip -input $original.lesionfilled+orig
+
+3dSkullStrip -mask_vol -prefix $original.strip -input $original.lesionfilled+orig -push_to_edge -shrink_fac_bot_lim -avoid_eyes
+
+##stop the program
+##check Skull stripping here and correct manually if needed
+
+3dcalc -a $original.strip+orig -expr "step(a-1)" -prefix $original.strip.step
+
+#echo "check skull stripping and type any key to continue with masking"
+#set var = $<
+#echo "You typed $var.  Now continuing..."
+
+
+3dcalc -a $original+orig -b $original.strip.step+orig -c $lesion+orig -expr "a*amongst(1,step(b),step(c))" -prefix $original.masked
+
+
+## stop to correct the mask
+## 2. Segmentation
+3dAFNItoNIFTI $original.masked+orig
+fast -o $original $original.masked.nii
+
+3dcalc -a $lesion+orig -b ${original}_seg.nii.gz -expr "b+3*step(a)*iszero(step(b))" -prefix ${original}_seg.withlesion
+
+## 3. Transforming into talairach space in order to separate hemisphere automatically
+
+3drotate -prefix $original.masked+orig -rotate 6P 0 0 $original.masked_temp+orig
+
+@auto_tlrc -xform shift_rotate -no_ss -rigid_equiv -suffix none -base /data/soft/afni/TT_N27+tlrc -input $original.masked+orig
+
+
+echo "step(a)*step(${flip_coef}*x)"
+3dcalc -a $original.masked+tlrc -expr "step(a)*step(${flip_coef}*x)"    -prefix $original.lh.step
+3dcalc -a $original.masked+tlrc -expr "step(a)*step(-1*${flip_coef}*x)" -prefix $original.rh.step
+
+
+3dfractionize -template $original.masked+orig -warp $original.masked+tlrc -input $original.lh.step+tlrc -prefix $original.lh.step -preserve -clip 0.2
+3dfractionize -template $original.masked+orig -warp $original.masked+tlrc -input $original.rh.step+tlrc -prefix $original.rh.step -preserve -clip 0.2
+
+3dcalc -a $original.lh.step+orig -b $original.masked+orig -c $lesion+orig     -expr "b*amongst(1,step(a),step(c))" -prefix $original.lh
+3dcalc -a $original.rh.step+orig -b $original.masked+orig                     -expr "b*step(a)" -prefix $original.rh
+3dLRflip -prefix $original.rh.flip         $original.rh+orig
+
+##to align LH with RH flipped, shift
+3dvolreg -Fourier -clipit -base $original.lh+orig -input $original.rh.flip+orig -prefix $original.rh.flip.shift.pretrim+orig  ###Make the original.lh values to be the rh.flip values
+3dWarpDrive -shift_rotate -cubic -final quintic -base $original.lh+orig -input $original.rh.flip+orig -prefix $original.rh.flip.shift.mask+orig
+3dcalc -a $original.rh.flip.shift.mask+orig -b $original.rh.flip.shift.pretrim+orig -expr 'b*step(a)' -prefix $original.rh.flip.shift+orig
+
+
+3dAFNItoNIFTI -prefix $original.rh.flip    		$original.rh.flip.shift+orig
+3dAFNItoNIFTI -prefix $original.lh 			$original.lh+orig
+
+
+# Cost function masking (Lesion as landmarks)
+
+3dcalc -a $lesion+orig -expr 'iszero(a)' -prefix $lesion.inv+orig
+3dAFNItoNIFTI -prefix $lesion.inv 			$lesion.inv+orig
+ANTS 3 -m "PR[$original.lh.nii,$original.rh.flip.nii,1,2]" -i 50x50x75x0 -o $original.rh.flip.lesion.ants.nii -t "SyN[0.25]" -x $lesion.inv.nii -r "Gauss[3,0]"
+WarpImageMultiTransform 3 $original.rh.flip.nii $original.rh.flip.lesion.Warped.nii -R $original.lh.nii $original.rh.flip.lesion.antsWarp.nii $original.rh.flip.lesion.antsAffine.txt
+
+##echo "Type any key to continue with trimming lesion"
+##set var = $<
+##echo "You typed $var.  Now continuing..."
+
+##preparing lesion without trimming
+
+3dcalc -a $lesion+orig -expr "iszero(step(a))" -prefix $lesion.csf.inv
+
+
+3dmerge -dxyz=1 -1clust_order 2 1 -prefix $lesion.csf.clust $lesion.csf.inv+orig
+3dcalc -a $lesion.csf.clust+orig -expr "iszero(equals(a,1))*100" -prefix $lesion.csf.100
+3dcalc -a $lesion.csf.100+orig -expr "step(a)" -prefix $lesion.trimmed
+3dmerge -1filter_nzmean 2 -prefix  $lesion.trimmed.blur $lesion.csf.100+orig
+3dcalc -a $lesion.trimmed.blur+orig -expr "step(a)" -prefix $lesion.trimmed.expanded
+
+
+3dcalc -datum byte -a $original+orig -b $original.rh.flip.lesion.Warped.nii -c $lesion.trimmed+orig          -expr 'a*iszero(step(c))+b*step(c)' -prefix $original.transplantlesionmask.full
+3dcalc -datum byte -a $original+orig -b $original.rh.flip.lesion.Warped.nii -c $lesion.trimmed.expanded+orig -expr 'a*iszero(step(c))+b*step(c)' -prefix $original.transplantlesionmask.full.expanded
+
+
+set transplant_path  = "${results_path}transplantlesionmask/"
+set trimmed_path     = "${transplant_path}trimmed"
+set expanded_path    = "${transplant_path}expanded"
+
+mkdir  "$transplant_path"
+mkdir  "$trimmed_path"
+mkdir  "$expanded_path"
+
+cd $trimmed_path
+from3d -input ${results_path}$original.transplantlesionmask.fullz+orig  -prefix trimmed.from3d
+nconvert -o "./%.#.tga" -out tga -in pgm `echo trimmed.from3d*`
+
+cd $expanded_path
+from3d -input ${results_path}$original.transplantlesionmask.full.expanded+orig -prefix expanded.from3d
+nconvert -o "./%.#.tga" -out tga -in pgm `echo expanded.from3d*`
+#echo expanded.from3d*
+set slice = `ls expanded.from3d.??? | tail -n 1 | awk -F'.' '{print $3}'`
+
+cd $results_path
+${script_path}Magic.Morpher2.with.arg $results_path $original $transplant_path $trimmed_path $expanded_path $iterations $mesh $slice transplantlesionmask
