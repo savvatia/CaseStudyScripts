@@ -19,4 +19,9 @@ Preprocessing & Statistical analysis:
 11. singleton_Ttest.sh: This script runs a TD group vs. Case Singleton T-test on the story vs. baseline contrast
 12. fs2wb.sh: this script creates the Freesurfer's fsaverage mid thickness images necessary for surface images with connectome workbench 
 13. convert_tstat2wb.sh: this script maps the t-stat image for a specified condition/contrast to the surface for connectome workbench images
+14. Virtual Brain Transplant Scripts. Based on Solodkin, A., Hasson, U., Siugzdaite, R., Schiel, M., Chen, E. E., Rolf, K., & Small, S. L.
+(2010). Virtual Brain Transplantation (VBT): A method for accurate image registration and parcellation in large cortical stroke. Archives Italiennes de Biologie, 148(3), 219–241. http://doi.org/10.4449/AIB.V148I3.1221: 
+	a. set_VBT_vars.sh: sets the variables for the main VBT script
+	b. synVBT: the main VBT script
+	c. Magic.Morpher2.witharg: needed for the synVBT to run
 
